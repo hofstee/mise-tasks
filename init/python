@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+#MISE description="Initialize or configure a Python project with uv and mise (with automatic legacy project bridging)."
+set -e
+
+# Operate relative to where the user called the command
+if [ -n "$MISE_ORIGINAL_CWD" ]; then
+  cd "$MISE_ORIGINAL_CWD"
+fi
+
+PROJECT_NAME=""
+PYTHON_VERSION="latest"
+
+# Parse arguments
+while [ $# -gt 0 ]; do
+  case $1 in
+    -p|--python) PYTHON_VERSION="$2"; shift 2 ;;
+    *) [ -z "$PROJECT_NAME" ] && PROJECT_NAME="$1"; shift ;;
+  esac
+done
+
+[ -n "$PROJECT_NAME" ] && mkdir -p "$PROJECT_NAME" && cd "$PROJECT_NAME"
+
+# 1. Ensure tools
+mise use "python@$PYTHON_VERSION" "uv@latest"
+
+# 2. Migration/Init
+HAS_REQ=false; [ -f "requirements.txt" ] && HAS_REQ=true
+HAS_REQ_DEV=false; [ -f "requirements-dev.txt" ] && HAS_REQ_DEV=true
+HAS_PYP=false; [ -f "pyproject.toml" ] && HAS_PYP=true
+
+if [ "$HAS_PYP" = false ]; then
+  echo "Initial migration from requirements.txt..."
+  uv init --bare
+  echo "# managed-by-mise-requirements" >> pyproject.toml
+  if [ "$HAS_REQ" = true ]; then
+    uv add -r requirements.txt
+    [ "$HAS_REQ_DEV" = true ] && uv add --dev -r requirements-dev.txt
+  fi
+fi
+
+# 3. Configure mise.toml
+[ ! -f "mise.toml" ] && touch mise.toml
+if ! grep -q "\\[settings\\]" ./mise.toml; then
+    cat <<EOT >> ./mise.toml
+[settings]
+python.uv_venv_auto = "create|source"
+experimental = true
+
+EOT
+fi
+if ! grep -q "_.python.venv" ./mise.toml; then
+    cat <<EOT >> ./mise.toml
+[env]
+_.python.venv = { path = ".venv", create = true }
+
+EOT
+fi
+
+# 4. Smart Legacy Bridge
+if [ "$HAS_REQ" = true ]; then
+  if ! grep -q "\\[deps.requirements\\]" ./mise.toml; then
+    cat <<'EOT' >> ./mise.toml
+[deps.requirements]
+sources = ["requirements.txt", "requirements-dev.txt"]
+outputs = ["pyproject.toml"]
+run = "if grep -q '# managed-by-mise-requirements' pyproject.toml; then rm pyproject.toml && uv init --bare && echo '# managed-by-mise-requirements' >> pyproject.toml && uv add -r requirements.txt && ([ -f requirements-dev.txt ] && uv add --dev -r requirements-dev.txt || true); else uv add -r requirements.txt && ([ -f requirements-dev.txt ] && uv add --dev -r requirements-dev.txt || true); fi"
+auto = true
+
+EOT
+    echo "Added smart legacy bridge for requirements.txt"
+  fi
+fi
+
+# 5. Built-in uv provider
+if ! grep -q "\\[deps.uv\\]" ./mise.toml; then
+  cat <<EOT >> ./mise.toml
+[deps.uv]
+auto = true
+depends = ["requirements"]
+
+EOT
+fi
+
+# 6. Default tasks
+# if ! grep -q "^\\[tasks\\]" ./mise.toml; then echo -e "\n[tasks]" >> ./mise.toml; fi
+if ! grep -q "\\[tasks.default\\]" ./mise.toml; then
+  CMD=""; [ -f "main.py" ] && CMD="python main.py"; [ -f "app.py" ] && CMD="python app.py"
+  if [ -n "$CMD" ]; then
+    cat <<EOT >> ./mise.toml
+[tasks.default]
+run = "$CMD"
+
+EOT
+    echo "Added task: default ($CMD)"
+  fi
+fi
+if ! grep -q "\\[tasks.test\\]" ./mise.toml && ([ -d "tests" ] || grep -q "pytest" pyproject.toml 2>/dev/null); then
+    cat <<EOT >> ./mise.toml
+[tasks.test]
+run = "pytest"
+env = { PYTHONPATH = "." }
+
+EOT
+    echo "Added task: test (pytest)"
+fi
+
+echo "Running sync..."
+mise deps
+echo "Project configured successfully."
