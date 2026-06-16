@@ -1,27 +1,20 @@
 #!/usr/bin/env bash
 #MISE description="Initialize or configure a Python project with uv and mise (with automatic legacy project bridging)."
+#USAGE flag "-p --python <version>" help="The Python version to use" default="latest"
+#USAGE arg "[dir]" help="The directory to use for the project"
 set -e
 
 # Operate relative to where the user called the command
-if [ -n "$MISE_ORIGINAL_CWD" ]; then
+if [[ -n $MISE_ORIGINAL_CWD ]]; then
   cd "$MISE_ORIGINAL_CWD"
 fi
 
-PROJECT_NAME=""
-PYTHON_VERSION="latest"
-
-# Parse arguments
-while [ $# -gt 0 ]; do
-  case $1 in
-    -p|--python) PYTHON_VERSION="$2"; shift 2 ;;
-    *) [ -z "$PROJECT_NAME" ] && PROJECT_NAME="$1"; shift ;;
-  esac
-done
-
-[ -n "$PROJECT_NAME" ] && mkdir -p "$PROJECT_NAME" && cd "$PROJECT_NAME"
+if [[ -n $usage_dir ]]; then
+  mkdir -p "${usage_dir:?}" && cd "${usage_dir:?}"
+fi
 
 # 1. Ensure tools
-mise use "python@$PYTHON_VERSION" "uv@latest"
+mise use "python@${usage_python?}" "uv@latest"
 
 # 2. Migration/Init
 HAS_REQ=false; [ -f "requirements.txt" ] && HAS_REQ=true
